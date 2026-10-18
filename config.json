@@ -1,0 +1,9 @@
+{
+    "urls": [
+        "https://jsonplaceholder.typicode.com/users",
+        "https://jsonplaceholder.typicode.com/invalid-domain",
+        "https://httpbin.org/delay/10",
+        "https://this-domain-definitely-does-not-exist-12345.com",
+        "https://jsonplaceholder.typicode.com/users"
+    ]
+}
