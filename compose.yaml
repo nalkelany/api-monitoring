@@ -1,0 +1,14 @@
+services:
+  api-monitoring:
+    build: .
+    volumes:
+      - .:/app
+
+  database:
+    build: .
+    volumes:
+      - .:/app
+    command: ["python", "setup_db.py"]
+    depends_on:
+      api-monitoring:
+        condition: service_completed_successfully
