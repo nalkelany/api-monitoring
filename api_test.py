@@ -1,5 +1,6 @@
 import requests
 import json
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime, timezone
@@ -7,50 +8,84 @@ from datetime import datetime, timezone
 config_path = Path(__file__).parent / "config.json"
 report_path = Path(__file__).parent / "api_report.json"
 
+
 def check_api(url):
+    start_time = time.perf_counter()
     try:
         response = requests.get(url, timeout=2)
+        response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         response.raise_for_status()
 
         return {
             "url": url,
             "status": response.status_code,
-            "result": "Healthy"
+            "result": "Healthy",
+            "response_time_ms": response_time_ms,
         }
 
     except requests.exceptions.Timeout:
+        response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         return {
             "url": url,
             "status": None,
-            "result": "Timeout"
+            "result": "Timeout",
+            "response_time_ms": response_time_ms,
         }
 
     except requests.exceptions.HTTPError:
+        response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         return {
             "url": url,
             "status": response.status_code,
-            "result": "HTTP Error"
+            "result": "HTTP Error",
+            "response_time_ms": response_time_ms,
         }
 
     except requests.exceptions.ConnectionError:
+        response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         return {
             "url": url,
             "status": None,
-            "result": "Connection Failed"
+            "result": "Connection Failed",
+            "response_time_ms": response_time_ms,
         }
 
     except requests.exceptions.RequestException:
+        response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         return {
             "url": url,
             "status": None,
-            "result": "Request Failed"
+            "result": "Request Failed",
+            "response_time_ms": response_time_ms,
         }
 
+
 def generate_report(results):
+    response_times = [
+        result["response_time_ms"] for result in results if "response_time_ms" in result
+    ]
+
+    slow_apis = [
+        result for result in results if result.get("response_time_ms", 0) >= 1000
+    ]
+
+    average_response_time = (
+        round(sum(response_times) / len(response_times), 2) if response_times else 0
+    )
+
+    min_response_time = round(min(response_times), 2) if response_times else 0
+
+    max_response_time = round(max(response_times), 2) if response_times else 0
+
     report = {
         "total": len(results),
         "healthy": 0,
-        "failed": 0
+        "failed": 0,
+        "average_response_time_ms": average_response_time,
+        "min_response_time_ms": min_response_time,
+        "max_response_time_ms": max_response_time,
+        "slow_apis": len(slow_apis),
+        "slow_apis_details": slow_apis,
     }
 
     for result in results:
@@ -60,6 +95,7 @@ def generate_report(results):
             report["failed"] += 1
 
     return report
+
 
 def main():
     print("Starting API Monitoring...")
@@ -114,7 +150,9 @@ def main():
             "|",
             result["status"],
             "|",
-            result["url"]
+            result.get("response_time_ms", "N/A"),
+            "ms |",
+            result["url"],
         )
 
     summary = generate_report(results)
@@ -125,7 +163,7 @@ def main():
     report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "results": results,
-        "summary": summary
+        "summary": summary,
     }
 
     with open(report_path, "w") as file:
