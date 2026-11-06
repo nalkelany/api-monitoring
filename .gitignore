@@ -4,3 +4,6 @@ __pycache__/
 venv/
 api_monitoring.db
 api_report.json
+
+# Log files
+log/

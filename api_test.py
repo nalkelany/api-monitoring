@@ -1,9 +1,65 @@
 import requests
 import json
 import time
+import logging
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+
+
+class CustomRotatingFileHandler(RotatingFileHandler):
+
+    def __init__(self, filename, *args, **kwargs):
+        log_path = Path(filename).resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        super().__init__(str(log_path), *args, **kwargs)
+
+    def doRollover(self):
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        log_path = Path(self.baseFilename)
+
+        if log_path.exists():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+            archive_name = f"{log_path.stem}_{timestamp}{log_path.suffix}"
+
+            archive_path = log_path.parent / archive_name
+
+            os.replace(log_path, archive_path)
+
+        if self.backupCount > 0:
+            archived_logs = sorted(
+                log_path.parent.glob(f"{log_path.stem}_*{log_path.suffix}"),
+                reverse=True,
+            )
+
+            for old_log in archived_logs[self.backupCount :]:
+                old_log.unlink()
+
+        if not self.delay:
+            self.stream = self._open()
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        CustomRotatingFileHandler(
+            "log/api_monitor.log",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        ),
+    ],
+)
 
 config_path = Path(__file__).parent / "config.json"
 report_path = Path(__file__).parent / "api_report.json"
@@ -15,7 +71,7 @@ def check_api(url):
         response = requests.get(url, timeout=2)
         response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         response.raise_for_status()
-
+        logging.info("API is healthy: %s | Status: %s", url, response.status_code)
         return {
             "url": url,
             "status": response.status_code,
@@ -25,6 +81,7 @@ def check_api(url):
 
     except requests.exceptions.Timeout:
         response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logging.warning("API request timed out: %s", url)
         return {
             "url": url,
             "status": None,
@@ -34,6 +91,7 @@ def check_api(url):
 
     except requests.exceptions.HTTPError:
         response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logging.error("HTTP error %s for URL: %s", response.status_code, url)
         return {
             "url": url,
             "status": response.status_code,
@@ -43,6 +101,7 @@ def check_api(url):
 
     except requests.exceptions.ConnectionError:
         response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logging.error("Connection failed for URL: %s", url)
         return {
             "url": url,
             "status": None,
@@ -52,6 +111,7 @@ def check_api(url):
 
     except requests.exceptions.RequestException:
         response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logging.error("Request failed for URL: %s", url)
         return {
             "url": url,
             "status": None,
@@ -98,7 +158,7 @@ def generate_report(results):
 
 
 def main():
-    print("Starting API Monitoring...")
+    logging.info("Starting API Monitoring...")
 
     try:
         with open(config_path, "r") as file:
@@ -123,11 +183,11 @@ def main():
             return
 
     except FileNotFoundError:
-        print("Error: config.json not found.")
+        logging.error("config.json not found.")
         return
 
     except json.JSONDecodeError:
-        print("Error: config.json contains invalid JSON.")
+        logging.error("config.json contains invalid JSON.")
         return
 
     urls = config["urls"]
@@ -145,13 +205,11 @@ def main():
         result = check_api(url)
         results.append(result)
 
-        print(
+        logging.info(
+            "%s | Status: %s | Response Time: %s ms | URL: %s",
             result["result"],
-            "|",
             result["status"],
-            "|",
             result.get("response_time_ms", "N/A"),
-            "ms |",
             result["url"],
         )
 
