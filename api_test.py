@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
+from alert_manager import create_and_send_batch_alert
 
 
 class CustomRotatingFileHandler(RotatingFileHandler):
@@ -63,6 +64,9 @@ logging.basicConfig(
 
 config_path = Path(__file__).parent / "config.json"
 report_path = Path(__file__).parent / "api_report.json"
+states_path = Path(__file__).parent / "api_states.json"
+performance_states_path = Path(__file__).parent / "api_performance_states.json"
+SLOW_RESPONSE_THRESHOLD_MS = 1000
 
 
 def check_api(url):
@@ -126,7 +130,9 @@ def generate_report(results):
     ]
 
     slow_apis = [
-        result for result in results if result.get("response_time_ms", 0) >= 1000
+        result
+        for result in results
+        if result.get("response_time_ms", 0) >= SLOW_RESPONSE_THRESHOLD_MS
     ]
 
     average_response_time = (
@@ -155,6 +161,50 @@ def generate_report(results):
             report["failed"] += 1
 
     return report
+
+
+def load_api_states():
+
+    try:
+        with open(states_path, "r") as file:
+            states = json.load(file)
+
+        return states
+
+    except FileNotFoundError:
+        return {}
+
+    except json.JSONDecodeError:
+        logging.error("api_states.json contains invalid JSON.")
+        return {}
+
+
+def load_performance_states():
+
+    try:
+        with open(performance_states_path, "r") as file:
+            states = json.load(file)
+
+        return states
+
+    except FileNotFoundError:
+        return {}
+
+    except json.JSONDecodeError:
+        logging.error("api_performance_states.json contains invalid JSON.")
+        return {}
+
+
+def save_performance_states(states):
+
+    with open(performance_states_path, "w") as file:
+        json.dump(states, file, indent=4)
+
+
+def save_api_states(states):
+
+    with open(states_path, "w") as file:
+        json.dump(states, file, indent=4)
 
 
 def main():
@@ -199,11 +249,80 @@ def main():
             print(f"Error: Invalid URL: {url}")
             return
 
+    api_states = load_api_states()
+    performance_states = load_performance_states()
     results = []
+    alerts = []
 
     for url in urls:
         result = check_api(url)
         results.append(result)
+
+        previous_state = api_states.get(url)
+        current_state = result["result"]
+
+        performance_status = (
+            "Slow"
+            if result["response_time_ms"] >= SLOW_RESPONSE_THRESHOLD_MS
+            else "Normal"
+        )
+        previous_performance = performance_states.get(url)
+        current_performance = performance_status
+
+        if current_state == "Healthy":
+
+            if current_performance == "Slow" and previous_performance != "Slow":
+
+                alerts.append(
+                    {
+                        "alert_type": "SLOW RESPONSE",
+                        "url": url,
+                        "status": current_state,
+                        "response_time_ms": result["response_time_ms"],
+                    }
+                )
+
+            elif current_performance == "Normal" and previous_performance == "Slow":
+
+                alerts.append(
+                    {
+                        "alert_type": "RESPONSE TIME RECOVERED",
+                        "url": url,
+                        "status": current_state,
+                        "response_time_ms": result["response_time_ms"],
+                    }
+                )
+
+            performance_states[url] = current_performance
+
+        else:
+            performance_states.pop(url, None)
+
+        if previous_state is None or previous_state == "Healthy":
+
+            if current_state != "Healthy":
+
+                alerts.append(
+                    {
+                        "alert_type": "API DOWN",
+                        "url": url,
+                        "status": current_state,
+                        "response_time_ms": result["response_time_ms"],
+                    }
+                )
+
+        elif previous_state != "Healthy" and current_state == "Healthy":
+
+            alerts.append(
+                {
+                    "alert_type": "API RECOVERED",
+                    "url": url,
+                    "status": current_state,
+                    "response_time_ms": result["response_time_ms"],
+                }
+            )
+
+        api_states[url] = current_state
 
         logging.info(
             "%s | Status: %s | Response Time: %s ms | URL: %s",
@@ -212,6 +331,30 @@ def main():
             result.get("response_time_ms", "N/A"),
             result["url"],
         )
+
+    if alerts:
+
+        alert_results = create_and_send_batch_alert(alerts)
+
+        logging.info("Batch alert results: %s", alert_results)
+
+        delivery_success = any(
+            result == "success"
+            for result in alert_results.values()
+        )
+
+        if delivery_success:
+            save_api_states(api_states)
+            save_performance_states(performance_states)
+
+        else:
+            logging.error(
+                "All alert channels failed. States were not saved."
+            )
+
+    else:
+        save_api_states(api_states)
+        save_performance_states(performance_states)
 
     summary = generate_report(results)
 
