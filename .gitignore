@@ -12,3 +12,10 @@ log/
 .env
 .env.*
 !.env.example
+
+# Runtime state files
+api_states.json
+api_performance_states.json
+
+# IDE settings
+.vscode/
